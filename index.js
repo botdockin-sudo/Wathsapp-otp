@@ -1,101 +1,79 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, delay } = require("@whiskeysockets/baileys");
 const express = require("express");
-const QRCode = require("qrcode");
 const pino = require("pino");
 
 const app = express();
 const port = process.env.PORT || 10000;
 
 let sock;
-let latestQR = null;
 let isConnected = false;
 
 async function startWhatsApp() {
-    // 'auth_info' folder mein login data save hoga
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     
     sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.macOS('Desktop'), // WhatsApp block se bachne ke liye
+        browser: Browsers.macOS('Desktop'), // Important
         syncFullHistory: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            latestQR = qr;
-            console.log("Naya QR Code generate hua hai. /qr check karein.");
-        }
-
+        const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             isConnected = false;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection band hui. Reconnecting:', shouldReconnect);
             if (shouldReconnect) startWhatsApp();
         } else if (connection === 'open') {
-            latestQR = null;
             isConnected = true;
-            console.log("✅ WhatsApp Successfully Connected!");
+            console.log("✅ WhatsApp Connected!");
         }
     });
 }
 
-// 1. Home Page
-app.get("/", (req, res) => {
-    if (isConnected) {
-        res.send("<h1>Bot Status: ✅ Connected</h1><p>OTP bhejne ke liye /send use karein.</p>");
-    } else {
-        res.send("<h1>Bot Status: ❌ Not Connected</h1><p>QR scan karne ke liye <a href='/qr'>Yahan Click Karein</a></p>");
-    }
-});
-
-// 2. QR Code Page (Yahan aapko QR dikhega)
-app.get("/qr", async (req, res) => {
-    if (isConnected) return res.send("<h1>Bot pehle se connected hai!</h1>");
-    if (!latestQR) return res.send("<h1>QR generate ho raha hai... 10 seconds baad refresh karein.</h1>");
-
+// 1. Pairing Page (Yahan apna number daal kar code lein)
+app.get("/pair", async (req, res) => {
+    let num = req.query.number;
+    if (!num) return res.send("<h1>Apna number URL mein daalein</h1><p>Example: /pair?number=919876543210</p>");
+    
     try {
-        const qrImage = await QRCode.toDataURL(latestQR);
+        num = num.replace(/[^0-9]/g, '');
+        if (isConnected) return res.send("<h1>WhatsApp Pehle se connected hai!</h1>");
+        
+        // WhatsApp se pairing code maangein
+        await delay(3000); // Thoda ruk kar request karein
+        let code = await sock.requestPairingCode(num);
+        
         res.send(`
-            <html>
-                <body style="text-align:center; font-family:Arial; background:#f0f2f5; padding-top:50px;">
-                    <div style="background:white; display:inline-block; padding:20px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
-                        <h2>Scan with WhatsApp</h2>
-                        <img src="${qrImage}" style="width:300px; height:300px;" />
-                        <p>Scanning ke baad ye page apne aap band ho jayega.</p>
-                    </div>
-                    <script>setTimeout(() => { location.reload(); }, 15000);</script>
-                </body>
-            </html>
+            <body style="text-align:center; font-family:sans-serif; padding-top:50px;">
+                <h1>Aapka Pairing Code:</h1>
+                <div style="background:#25D366; color:white; display:inline-block; padding:20px; font-size:40px; border-radius:10px; letter-spacing:5px;">
+                    ${code}
+                </div>
+                <p>1. WhatsApp kholein apne phone mein.</p>
+                <p>2. Linked Devices > Link a Device > <b>Link with phone number instead</b> par jayein.</p>
+                <p>3. Ye 8-digit code wahan dalein.</p>
+            </body>
         `);
     } catch (err) {
-        res.send("QR Error: " + err.message);
+        res.send("Error: " + err.message + ". Ek baar logs check karein ya refresh karein.");
     }
 });
 
-// 3. OTP Bhejne ka Link
-// Example: /send?number=919876543210&otp=556677
+app.get("/", (req, res) => {
+    res.send(isConnected ? "Connected ✅" : "Not Connected ❌. Go to <a href='/pair'>/pair</a>");
+});
+
 app.get("/send", async (req, res) => {
     const { number, otp } = req.query;
-
-    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connected nahi hai." });
-    if (!number || !otp) return res.status(400).json({ status: "error", message: "Number aur OTP dalna zaroori hai." });
-
+    if (!isConnected) return res.send("Bot connected nahi hai.");
     try {
-        const cleanNumber = number.replace(/[^0-9]/g, ""); // Sirf numbers rakhega
-        const jid = `${cleanNumber}@s.whatsapp.net`;
-        
-        await sock.sendMessage(jid, { 
-            text: `*OTP Verification*\n\nAapka code hai: *${otp}*\n\nIse kisi ko na batayein.` 
-        });
-
-        res.json({ status: "success", message: `OTP sent to ${cleanNumber}` });
-    } catch (err) {
-        res.status(500).json({ status: "error", message: err.message });
+        await sock.sendMessage(`${number}@s.whatsapp.net`, { text: `OTP: ${otp}` });
+        res.send("Sent ✅");
+    } catch (e) {
+        res.send("Error: " + e.message);
     }
 });
 
