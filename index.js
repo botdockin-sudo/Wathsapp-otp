@@ -1,4 +1,11 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, delay } = require("@whiskeysockets/baileys");
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason, 
+    Browsers, 
+    delay, 
+    fetchLatestBaileysVersion 
+} = require("@whiskeysockets/baileys");
 const express = require("express");
 const pino = require("pino");
 
@@ -10,74 +17,104 @@ let isConnected = false;
 
 async function startWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    
+    const { version } = await fetchLatestBaileysVersion();
+
     sock = makeWASocket({
         auth: state,
+        version: version,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.macOS('Desktop'), // Important
-        syncFullHistory: false
+        // Render block se bachne ke liye stable browser agent
+        browser: Browsers.ubuntu("Chrome"), 
+        syncFullHistory: false,
+        markOnlineOnConnect: true
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
+        
         if (connection === 'close') {
             isConnected = false;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startWhatsApp();
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            console.log('Connection closed. Reason Code:', reason);
+            
+            if (reason !== DisconnectReason.loggedOut) {
+                console.log("Reconnecting in 5 seconds...");
+                setTimeout(startWhatsApp, 5000);
+            } else {
+                console.log("Logged out. Delete 'auth_info' and re-scan.");
+            }
         } else if (connection === 'open') {
             isConnected = true;
-            console.log("✅ WhatsApp Connected!");
+            console.log("✅ WhatsApp Connected Successfully!");
         }
     });
 }
 
-// 1. Pairing Page (Yahan apna number daal kar code lein)
+// 1. Home Route
+app.get("/", (req, res) => {
+    res.send(`
+        <body style="font-family:sans-serif; text-align:center; padding-top:50px;">
+            <h1>WhatsApp OTP Server</h1>
+            <p>Status: ${isConnected ? "✅ Connected" : "❌ Not Connected"}</p>
+            ${!isConnected ? "<a href='/pair'>Link Device (Pairing Code)</a>" : "<p>Use /send to send OTP</p>"}
+        </body>
+    `);
+});
+
+// 2. Pairing Code Route
 app.get("/pair", async (req, res) => {
-    let num = req.query.number;
-    if (!num) return res.send("<h1>Apna number URL mein daalein</h1><p>Example: /pair?number=919876543210</p>");
+    let phoneNumber = req.query.number;
     
+    if (!phoneNumber) {
+        return res.send("<h1>Error</h1><p>URL mein number dalein. Example: /pair?number=919693521763</p>");
+    }
+
+    phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+
+    if (isConnected) return res.send("<h1>Pehle se connected hai!</h1>");
+
     try {
-        num = num.replace(/[^0-9]/g, '');
-        if (isConnected) return res.send("<h1>WhatsApp Pehle se connected hai!</h1>");
-        
-        // WhatsApp se pairing code maangein
-        await delay(3000); // Thoda ruk kar request karein
-        let code = await sock.requestPairingCode(num);
+        // Socket ko initialize hone ka time dein
+        await delay(3000); 
+        const code = await sock.requestPairingCode(phoneNumber);
         
         res.send(`
-            <body style="text-align:center; font-family:sans-serif; padding-top:50px;">
-                <h1>Aapka Pairing Code:</h1>
-                <div style="background:#25D366; color:white; display:inline-block; padding:20px; font-size:40px; border-radius:10px; letter-spacing:5px;">
+            <div style="text-align:center; font-family:sans-serif; margin-top:50px;">
+                <h2>Aapka Pairing Code:</h2>
+                <div style="background:#25D366; color:white; display:inline-block; padding:20px; font-size:40px; border-radius:10px; font-weight:bold;">
                     ${code}
                 </div>
-                <p>1. WhatsApp kholein apne phone mein.</p>
-                <p>2. Linked Devices > Link a Device > <b>Link with phone number instead</b> par jayein.</p>
-                <p>3. Ye 8-digit code wahan dalein.</p>
-            </body>
+                <p>Is code ko apne WhatsApp (Linked Devices) mein dalein.</p>
+                <p><a href="/">Home par jayein</a></p>
+            </div>
         `);
     } catch (err) {
-        res.send("Error: " + err.message + ". Ek baar logs check karein ya refresh karein.");
+        console.log(err);
+        res.status(500).send("<h1>Error!</h1><p>Code nahi mil saka. Page refresh karein ya logs check karein.</p>");
     }
 });
 
-app.get("/", (req, res) => {
-    res.send(isConnected ? "Connected ✅" : "Not Connected ❌. Go to <a href='/pair'>/pair</a>");
-});
-
+// 3. OTP Sending Route
 app.get("/send", async (req, res) => {
     const { number, otp } = req.query;
-    if (!isConnected) return res.send("Bot connected nahi hai.");
+
+    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connected nahi hai." });
+    if (!number || !otp) return res.status(400).json({ status: "error", message: "Number aur OTP missing hai." });
+
     try {
-        await sock.sendMessage(`${number}@s.whatsapp.net`, { text: `OTP: ${otp}` });
-        res.send("Sent ✅");
-    } catch (e) {
-        res.send("Error: " + e.message);
+        const cleanNumber = number.replace(/[^0-9]/g, "");
+        const jid = `${cleanNumber}@s.whatsapp.net`;
+        
+        await sock.sendMessage(jid, { text: `Aapka OTP code hai: *${otp}*` });
+        res.json({ status: "success", message: "Sent" });
+    } catch (err) {
+        res.status(500).json({ status: "error", message: err.message });
     }
 });
 
 app.listen(port, () => {
-    console.log(`Server started on port ${port}`);
+    console.log(`Server is running on port ${port}`);
     startWhatsApp();
 });
