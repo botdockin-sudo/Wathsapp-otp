@@ -107,8 +107,19 @@ app.get("/send", async (req, res) => {
         const cleanNumber = number.replace(/[^0-9]/g, "");
         const jid = `${cleanNumber}@s.whatsapp.net`;
         
-        await sock.sendMessage(jid, { text: `Your Login/Sing up OTP Is: *${otp}* This OTP is valid for 5 minutes.
-Do not share this OTP with anyone.` });
+        await sock.sendMessage(jid, {
+  text: `🔐 *DoneKart Verification *
+
+Your OTP for Login / Sign Up is:
+
+✨ *${otp}*
+
+⏳ Valid for: *5 Minutes*
+
+⚠️ Do not share this OTP with anyone for security reasons.
+
+— Team DoneKart`
+});
         res.json({ status: "success", message: "Sent" });
     } catch (err) {
         res.status(500).json({ status: "error", message: err.message });
