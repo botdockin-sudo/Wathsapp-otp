@@ -6,8 +6,6 @@ DisconnectReason
 
 const express = require("express");
 
-const qrcode = require("qrcode-terminal");
-
 const pino = require("pino");
 
 const admin = require("firebase-admin");
@@ -56,7 +54,7 @@ let sock;
 
 
 /* =========================
-   WHATSAPP START
+   START WHATSAPP
 ========================= */
 
 async function startWhatsApp(){
@@ -78,7 +76,7 @@ makeWASocket({
 
 auth: state,
 
-printQRInTerminal: false,
+printQRInTerminal: true,
 
 logger: pino({
 level: "silent"
@@ -97,11 +95,11 @@ saveCreds
 
 
 
-/* CONNECTION */
+/* CONNECTION UPDATE */
 
 sock.ev.on(
 "connection.update",
-async(update)=>{
+(update)=>{
 
 const {
 connection,
@@ -111,18 +109,13 @@ qr
 
 
 
-/* QR */
+/* QR RECEIVED */
 
 if(qr){
 
-console.log("");
-console.log("================================");
-console.log("SCAN THIS QR CODE");
-console.log("================================");
-
-qrcode.generate(qr,{
-small:true
-});
+console.log(
+"QR RECEIVED - Scan From Render Logs"
+);
 
 }
 
@@ -180,7 +173,7 @@ console.log(err);
 
 
 /* =========================
-   HOME ROUTE
+   HOME
 ========================= */
 
 app.get("/", (req,res)=>{
@@ -249,7 +242,7 @@ Math.floor(
 
 
 
-/* SAVE OTP IN FIREBASE */
+/* SAVE OTP */
 
 await db
 .ref("otp/" + number)
@@ -393,7 +386,7 @@ snapshot.val();
 
 
 
-/* EXPIRED */
+/* OTP EXPIRED */
 
 if(
 Date.now() >
@@ -417,7 +410,7 @@ message:"OTP Expired"
 
 
 
-/* WRONG OTP */
+/* INVALID OTP */
 
 if(
 otpData.code !== otp
