@@ -15,6 +15,9 @@ const port = process.env.PORT || 10000;
 let sock;
 let isConnected = false;
 
+// OTP ko RAM mein store karne ke liye
+const otpStore = new Map();
+
 async function startWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
@@ -23,7 +26,6 @@ async function startWhatsApp() {
         auth: state,
         version: version,
         logger: pino({ level: 'silent' }),
-        // Render block se bachne ke liye stable browser agent
         browser: Browsers.ubuntu("Chrome"), 
         syncFullHistory: false,
         markOnlineOnConnect: true
@@ -31,102 +33,104 @@ async function startWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
-        
         if (connection === 'close') {
             isConnected = false;
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log('Connection closed. Reason Code:', reason);
-            
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log("Reconnecting in 5 seconds...");
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
                 setTimeout(startWhatsApp, 5000);
-            } else {
-                console.log("Logged out. Delete 'auth_info' and re-scan.");
             }
         } else if (connection === 'open') {
             isConnected = true;
-            console.log("✅ WhatsApp Connected Successfully!");
+            console.log("✅ WhatsApp Connected!");
         }
     });
 }
 
-// 1. Home Route
+// 1. Home Page
 app.get("/", (req, res) => {
     res.send(`
-        <body style="font-family:sans-serif; text-align:center; padding-top:50px;">
-            <h1>WhatsApp OTP Server</h1>
+        <div style="font-family:sans-serif; text-align:center; padding-top:50px;">
+            <h1>DoneKart OTP Server</h1>
             <p>Status: ${isConnected ? "✅ Connected" : "❌ Not Connected"}</p>
-            ${!isConnected ? "<a href='/pair'>Link Device (Pairing Code)</a>" : "<p>Use /send to send OTP</p>"}
-        </body>
+            <p>Send OTP: <code>/send?number=91XXXXXXXXXX</code></p>
+        </div>
     `);
 });
 
 // 2. Pairing Code Route
 app.get("/pair", async (req, res) => {
     let phoneNumber = req.query.number;
-    
-    if (!phoneNumber) {
-        return res.send("<h1>Error</h1><p>URL mein number dalein. Example: /pair?number=919693521763</p>");
-    }
-
+    if (!phoneNumber) return res.send("Number missing!");
     phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
-
-    if (isConnected) return res.send("<h1>Pehle se connected hai!</h1>");
-
     try {
-        // Socket ko initialize hone ka time dein
-        await delay(3000); 
+        await delay(2000);
         const code = await sock.requestPairingCode(phoneNumber);
-        
-        res.send(`
-            <div style="text-align:center; font-family:sans-serif; margin-top:50px;">
-                <h2>Aapka Pairing Code:</h2>
-                <div style="background:#25D366; color:white; display:inline-block; padding:20px; font-size:40px; border-radius:10px; font-weight:bold;">
-                    ${code}
-                </div>
-                <p>Is code ko apne WhatsApp (Linked Devices) mein dalein.</p>
-                <p><a href="/">Home par jayein</a></p>
-            </div>
-        `);
+        res.send(`<h1>Pairing Code: ${code}</h1>`);
     } catch (err) {
-        console.log(err);
-        res.status(500).send("<h1>Error!</h1><p>Code nahi mil saka. Page refresh karein ya logs check karein.</p>");
+        res.send("Error generating code.");
     }
 });
 
-// 3. OTP Sending Route
+// 3. Send OTP (Auto-Generate & RAM-expiry)
 app.get("/send", async (req, res) => {
-    const { number, otp } = req.query;
+    const { number } = req.query;
 
-    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connected nahi hai." });
-    if (!number || !otp) return res.status(400).json({ status: "error", message: "Number aur OTP missing hai." });
+    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connect nahi hai." });
+    if (!number) return res.status(400).json({ status: "error", message: "Number chahiye." });
+
+    const cleanNumber = number.replace(/[^0-9]/g, "");
+    const jid = `${cleanNumber}@s.whatsapp.net`;
+
+    // 6 digit random OTP
+    const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
 
     try {
-        const cleanNumber = number.replace(/[^0-9]/g, "");
-        const jid = `${cleanNumber}@s.whatsapp.net`;
-        
+        // WhatsApp par message bhejna
         await sock.sendMessage(jid, {
-  text: `🔐 *DoneKart Verification*
+            text: `🔐 *DoneKart Verification*\n\nYour OTP is: *${generatedOtp}*\n\n⏳ Valid for: *5 Minutes*\n\n— Team DoneKart`
+        });
 
-Your OTP for Login / Sign Up is:
+        // RAM (Map) mein save karna
+        otpStore.set(cleanNumber, generatedOtp);
 
-✨ *${otp}*
+        // 5 Minute baad RAM se delete karna (WhatsApp se nahi)
+        setTimeout(() => {
+            otpStore.delete(cleanNumber);
+            console.log(`OTP Expired for ${cleanNumber} (Removed from RAM)`);
+        }, 5 * 60 * 1000);
 
-⏳ Valid for: *5 Minutes*
-
-⚠️ Do not share this OTP with anyone for security reasons.
-
-— Team DoneKart`
-});
-        res.json({ status: "success", message: "Sent" });
+        res.json({ 
+            status: "success", 
+            message: "OTP Sent", 
+            number: cleanNumber,
+            verify_url: `/verify?number=${cleanNumber}&otp=${generatedOtp}`
+        });
     } catch (err) {
         res.status(500).json({ status: "error", message: err.message });
     }
 });
 
+// 4. Verify OTP Route
+app.get("/verify", (req, res) => {
+    const { number, otp } = req.query;
+    const cleanNumber = number?.replace(/[^0-9]/g, "");
+    
+    const savedOtp = otpStore.get(cleanNumber);
+
+    if (!savedOtp) {
+        return res.json({ status: "error", message: "OTP expired ya invalid hai." });
+    }
+
+    if (savedOtp === otp) {
+        otpStore.delete(cleanNumber); // Verify hone par RAM se hata do
+        res.json({ status: "success", message: "OTP Sahi Hai!" });
+    } else {
+        res.json({ status: "error", message: "Galat OTP!" });
+    }
+});
+
 app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+    console.log(`Server started on port ${port}`);
     startWhatsApp();
 });
