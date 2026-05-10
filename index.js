@@ -1,114 +1,200 @@
-const { 
-    default: makeWASocket, 
-    useMultiFileAuthState, 
-    DisconnectReason, 
-    Browsers, 
-    delay, 
-    fetchLatestBaileysVersion 
-} = require("@whiskeysockets/baileys");
 const express = require("express");
-const pino = require("pino");
+const cors = require("cors");
+
+const admin = require("firebase-admin");
+
+const {
+default: makeWASocket,
+DisconnectReason,
+useMultiFileAuthState
+} = require("@whiskeysockets/baileys");
+
+
 
 const app = express();
-const port = process.env.PORT || 10000;
+
+const port = process.env.PORT || 3000;
+
+
+
+app.use(cors());
+app.use(express.json());
+
+
+
+// FIREBASE
+
+const serviceAccount =
+require("./serviceAccountKey.json");
+
+
+
+admin.initializeApp({
+
+credential:
+admin.credential.cert(serviceAccount),
+
+databaseURL:
+"https://donekart-1f33e-default-rtdb.firebaseio.com"
+
+});
+
+
+
+const db =
+admin.database();
+
+
 
 let sock;
-let isConnected = false;
 
-async function startWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
-        auth: state,
-        version: version,
-        logger: pino({ level: 'silent' }),
-        // Render block se bachne ke liye stable browser agent
-        browser: Browsers.ubuntu("Chrome"), 
-        syncFullHistory: false,
-        markOnlineOnConnect: true
-    });
 
-    sock.ev.on('creds.update', saveCreds);
+// START WHATSAPP
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-        
-        if (connection === 'close') {
-            isConnected = false;
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log('Connection closed. Reason Code:', reason);
-            
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log("Reconnecting in 5 seconds...");
-                setTimeout(startWhatsApp, 5000);
-            } else {
-                console.log("Logged out. Delete 'auth_info' and re-scan.");
-            }
-        } else if (connection === 'open') {
-            isConnected = true;
-            console.log("✅ WhatsApp Connected Successfully!");
-        }
-    });
+async function startWhatsApp(){
+
+const {
+state,
+saveCreds
+} =
+await useMultiFileAuthState("./auth");
+
+
+
+sock = makeWASocket({
+
+auth: state,
+
+browser: [
+"DoneKart",
+"Chrome",
+"1.0.0"
+]
+
+});
+
+
+
+sock.ev.on(
+"creds.update",
+saveCreds
+);
+
+
+
+sock.ev.on(
+"connection.update",
+(update)=>{
+
+const {
+connection,
+lastDisconnect
+} = update;
+
+
+
+if(connection === "close"){
+
+const shouldReconnect =
+
+lastDisconnect?.error?.output?.statusCode
+!== DisconnectReason.loggedOut;
+
+
+
+console.log("Disconnected");
+
+
+
+if(shouldReconnect){
+
+startWhatsApp();
+
 }
 
-// 1. Home Route
-app.get("/", (req, res) => {
-    res.send(`
-        <body style="font-family:sans-serif; text-align:center; padding-top:50px;">
-            <h1>WhatsApp OTP Server</h1>
-            <p>Status: ${isConnected ? "✅ Connected" : "❌ Not Connected"}</p>
-            ${!isConnected ? "<a href='/pair'>Link Device (Pairing Code)</a>" : "<p>Use /send to send OTP</p>"}
-        </body>
-    `);
+}
+
+
+
+if(connection === "open"){
+
+console.log(
+"WhatsApp Connected"
+);
+
+}
+
 });
 
-// 2. Pairing Code Route
-app.get("/pair", async (req, res) => {
-    let phoneNumber = req.query.number;
-    
-    if (!phoneNumber) {
-        return res.send("<h1>Error</h1><p>URL mein number dalein. Example: /pair?number=919693521763</p>");
-    }
+}
 
-    phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
 
-    if (isConnected) return res.send("<h1>Pehle se connected hai!</h1>");
 
-    try {
-        // Socket ko initialize hone ka time dein
-        await delay(3000); 
-        const code = await sock.requestPairingCode(phoneNumber);
-        
-        res.send(`
-            <div style="text-align:center; font-family:sans-serif; margin-top:50px;">
-                <h2>Aapka Pairing Code:</h2>
-                <div style="background:#25D366; color:white; display:inline-block; padding:20px; font-size:40px; border-radius:10px; font-weight:bold;">
-                    ${code}
-                </div>
-                <p>Is code ko apne WhatsApp (Linked Devices) mein dalein.</p>
-                <p><a href="/">Home par jayein</a></p>
-            </div>
-        `);
-    } catch (err) {
-        console.log(err);
-        res.status(500).send("<h1>Error!</h1><p>Code nahi mil saka. Page refresh karein ya logs check karein.</p>");
-    }
+// SEND OTP
+
+app.post(
+"/send-otp",
+async(req,res)=>{
+
+try{
+
+const number =
+req.body.number;
+
+
+
+if(!number){
+
+return res.status(400).json({
+
+status:"error",
+message:"Number required"
+
 });
 
-// 3. OTP Sending Route
-app.get("/send", async (req, res) => {
-    const { number, otp } = req.query;
+}
 
-    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connected nahi hai." });
-    if (!number || !otp) return res.status(400).json({ status: "error", message: "Number aur OTP missing hai." });
 
-    try {
-        const cleanNumber = number.replace(/[^0-9]/g, "");
-        const jid = `${cleanNumber}@s.whatsapp.net`;
-        
-        await sock.sendMessage(jid, {
-  text: `🔐 *DoneKart Verification *
+
+// GENERATE OTP
+
+const otp =
+
+Math.floor(
+100000 + Math.random() * 900000
+).toString();
+
+
+
+// SAVE OTP IN FIREBASE
+
+await db
+.ref("otp/" + number)
+.set({
+
+code: otp,
+
+createdAt:
+Date.now(),
+
+expiresAt:
+Date.now() + 300000
+
+});
+
+
+
+// SEND WHATSAPP MESSAGE
+
+await sock.sendMessage(
+
+number + "@s.whatsapp.net",
+
+{
+
+text:
+`🔐 *DoneKart Verification*
 
 Your OTP for Login / Sign Up is:
 
@@ -119,14 +205,176 @@ Your OTP for Login / Sign Up is:
 ⚠️ Do not share this OTP with anyone for security reasons.
 
 — Team DoneKart`
-});
-        res.json({ status: "success", message: "Sent" });
-    } catch (err) {
-        res.status(500).json({ status: "error", message: err.message });
-    }
+
+}
+
+);
+
+
+
+res.json({
+
+status:"success",
+message:"OTP Sent"
+
 });
 
-app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
-    startWhatsApp();
+
+
+}catch(err){
+
+console.log(err);
+
+res.status(500).json({
+
+status:"error",
+message:err.message
+
+});
+
+}
+
+});
+
+
+
+// VERIFY OTP
+
+app.post(
+"/verify-otp",
+async(req,res)=>{
+
+try{
+
+const number =
+req.body.number;
+
+const otp =
+req.body.otp;
+
+
+
+if(!number || !otp){
+
+return res.status(400).json({
+
+status:"error",
+message:"Missing fields"
+
+});
+
+}
+
+
+
+// GET OTP FROM FIREBASE
+
+const snapshot =
+await db
+.ref("otp/" + number)
+.once("value");
+
+
+
+if(!snapshot.exists()){
+
+return res.status(400).json({
+
+status:"error",
+message:"OTP Expired"
+
+});
+
+}
+
+
+
+const otpData =
+snapshot.val();
+
+
+
+// CHECK EXPIRY
+
+if(
+Date.now() >
+otpData.expiresAt
+){
+
+await db
+.ref("otp/" + number)
+.remove();
+
+
+
+return res.status(400).json({
+
+status:"error",
+message:"OTP Expired"
+
+});
+
+}
+
+
+
+// WRONG OTP
+
+if(otpData.code !== otp){
+
+return res.status(400).json({
+
+status:"error",
+message:"Invalid OTP"
+
+});
+
+}
+
+
+
+// DELETE OTP AFTER SUCCESS
+
+await db
+.ref("otp/" + number)
+.remove();
+
+
+
+// VERIFIED
+
+res.json({
+
+status:"success",
+verified:true
+
+});
+
+
+
+}catch(err){
+
+console.log(err);
+
+res.status(500).json({
+
+status:"error",
+message:err.message
+
+});
+
+}
+
+});
+
+
+
+app.listen(port, ()=>{
+
+console.log(
+`Server running on port ${port}`
+);
+
+startWhatsApp();
+
 });
