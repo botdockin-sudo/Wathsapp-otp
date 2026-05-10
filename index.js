@@ -43,8 +43,6 @@ let sock;
 
 let isConnected = false;
 
-let pairingCode = "";
-
 
 
 /* =========================
@@ -96,50 +94,6 @@ saveCreds
 
 
 
-/* PAIRING CODE */
-
-if(
-!sock.authState.creds.registered
-){
-
-const number =
-process.env.NUMBER;
-
-
-
-if(number){
-
-pairingCode =
-await sock.requestPairingCode(
-number
-);
-
-console.log("");
-
-console.log(
-"================================"
-);
-
-console.log(
-"PAIRING CODE:"
-);
-
-console.log(
-pairingCode
-);
-
-console.log(
-"================================"
-);
-
-console.log("");
-
-}
-
-}
-
-
-
 /* CONNECTION UPDATE */
 
 sock.ev.on(
@@ -153,7 +107,7 @@ lastDisconnect
 
 
 
-/* CLOSE */
+/* DISCONNECTED */
 
 if(connection === "close"){
 
@@ -184,13 +138,11 @@ startWhatsApp();
 
 
 
-/* OPEN */
+/* CONNECTED */
 
 else if(connection === "open"){
 
 isConnected = true;
-
-pairingCode = "";
 
 
 
@@ -232,73 +184,65 @@ console.log(err);
 
 app.get("/", (req,res)=>{
 
-if(isConnected){
-
 res.send(`
 
 <h1>
-WhatsApp Connected
+DoneKart OTP Server
 </h1>
 
 <p>
-DoneKart OTP Server Running
+Pair URL Example:
 </p>
-
-`);
-
-}else{
-
-res.send(`
-
-<h1>
-WhatsApp Not Connected
-</h1>
 
 <p>
-Open:
-<a href="/pair">
-/pair
-</a>
+/pair?number=919693521763
+</p>
+
+<p>
+Send OTP:
+</p>
+
+<p>
+/send?number=919693521763
 </p>
 
 `);
-
-}
 
 });
 
 
 
 /* =========================
-   PAIR URL
+   PAIR CODE
 ========================= */
 
-app.get("/pair", (req,res)=>{
+app.get(
+"/pair",
+async(req,res)=>{
 
-if(isConnected){
+try{
+
+
+
+const number =
+req.query.number;
+
+
+
+/* VALIDATION */
+
+if(!number){
 
 return res.send(`
 
 <h1>
-WhatsApp Already Connected
-</h1>
-
-`);
-
-}
-
-
-
-if(!pairingCode){
-
-return res.send(`
-
-<h1>
-Pairing Code Generating...
+Number Required
 </h1>
 
 <p>
-Refresh after 10 seconds
+Example:
+<br><br>
+/pair?number=919693521763
 </p>
 
 `);
@@ -306,6 +250,28 @@ Refresh after 10 seconds
 }
 
 
+
+/* CLEAN NUMBER */
+
+const cleanNumber =
+
+number.replace(
+/[^0-9]/g,
+""
+);
+
+
+
+/* CREATE PAIR CODE */
+
+const code =
+await sock.requestPairingCode(
+cleanNumber
+);
+
+
+
+/* RESPONSE */
 
 res.send(`
 
@@ -340,7 +306,7 @@ margin-top:20px;
 color:#2d45a0;
 ">
 
-${pairingCode}
+${code}
 
 </div>
 
@@ -362,6 +328,16 @@ Link With Phone Number
 </html>
 
 `);
+
+
+
+}catch(err){
+
+res.send(
+"Error: " + err.message
+);
+
+}
 
 });
 
@@ -399,6 +375,8 @@ message:
 }
 
 
+
+/* CONNECTION CHECK */
 
 if(!isConnected){
 
@@ -445,7 +423,7 @@ otp
 
 
 
-/* SEND */
+/* SEND MESSAGE */
 
 await sock.sendMessage(
 
@@ -554,6 +532,8 @@ cleanNumber
 );
 
 
+
+/* EXPIRED */
 
 if(!savedOtp){
 
