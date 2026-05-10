@@ -1,28 +1,22 @@
+const {
+default: makeWASocket,
+useMultiFileAuthState,
+DisconnectReason
+} = require("@whiskeysockets/baileys");
+
 const express = require("express");
-const cors = require("cors");
+
+const qrcode = require("qrcode-terminal");
+
+const pino = require("pino");
 
 const admin = require("firebase-admin");
 
-const {
-default: makeWASocket,
-DisconnectReason,
-useMultiFileAuthState
-} = require("@whiskeysockets/baileys");
 
 
-
-const app = express();
-
-const port = process.env.PORT || 3000;
-
-
-
-app.use(cors());
-app.use(express.json());
-
-
-
-// FIREBASE
+/* =========================
+   FIREBASE
+========================= */
 
 const serviceAccount =
 require("./serviceAccountKey.json");
@@ -46,35 +40,55 @@ admin.database();
 
 
 
+/* =========================
+   EXPRESS
+========================= */
+
+const app = express();
+
+const port =
+process.env.PORT || 10000;
+
+
+
 let sock;
 
 
 
-// START WHATSAPP
+/* =========================
+   WHATSAPP START
+========================= */
 
 async function startWhatsApp(){
+
+try{
 
 const {
 state,
 saveCreds
 } =
-await useMultiFileAuthState("./auth");
+await useMultiFileAuthState(
+"auth_info"
+);
 
 
 
-sock = makeWASocket({
+sock =
+makeWASocket({
 
 auth: state,
 
-browser: [
-"DoneKart",
-"Chrome",
-"1.0.0"
-]
+printQRInTerminal: false,
+
+logger: pino({
+level: "silent"
+})
 
 });
 
 
+
+/* SAVE SESSION */
 
 sock.ev.on(
 "creds.update",
@@ -83,16 +97,38 @@ saveCreds
 
 
 
+/* CONNECTION */
+
 sock.ev.on(
 "connection.update",
-(update)=>{
+async(update)=>{
 
 const {
 connection,
-lastDisconnect
+lastDisconnect,
+qr
 } = update;
 
 
+
+/* QR */
+
+if(qr){
+
+console.log("");
+console.log("================================");
+console.log("SCAN THIS QR CODE");
+console.log("================================");
+
+qrcode.generate(qr,{
+small:true
+});
+
+}
+
+
+
+/* DISCONNECTED */
 
 if(connection === "close"){
 
@@ -103,7 +139,9 @@ lastDisconnect?.error?.output?.statusCode
 
 
 
-console.log("Disconnected");
+console.log(
+"Connection Closed"
+);
 
 
 
@@ -117,39 +155,68 @@ startWhatsApp();
 
 
 
-if(connection === "open"){
+/* CONNECTED */
+
+else if(connection === "open"){
 
 console.log(
-"WhatsApp Connected"
+"WhatsApp Connected Successfully"
 );
 
 }
 
 });
 
+
+
+}catch(err){
+
+console.log(err);
+
+}
+
 }
 
 
 
-// SEND OTP
+/* =========================
+   HOME ROUTE
+========================= */
 
-app.post(
-"/send-otp",
+app.get("/", (req,res)=>{
+
+res.send(
+"DoneKart OTP Server Running"
+);
+
+});
+
+
+
+/* =========================
+   SEND OTP
+========================= */
+
+app.get(
+"/send",
 async(req,res)=>{
 
 try{
 
-const number =
-req.body.number;
+const {
+number
+} = req.query;
 
 
+
+/* VALIDATION */
 
 if(!number){
 
 return res.status(400).json({
 
 status:"error",
-message:"Number required"
+message:"Number Required"
 
 });
 
@@ -157,7 +224,22 @@ message:"Number required"
 
 
 
-// GENERATE OTP
+/* WHATSAPP CHECK */
+
+if(!sock){
+
+return res.status(500).json({
+
+status:"error",
+message:"WhatsApp Not Connected"
+
+});
+
+}
+
+
+
+/* GENERATE OTP */
 
 const otp =
 
@@ -167,7 +249,7 @@ Math.floor(
 
 
 
-// SAVE OTP IN FIREBASE
+/* SAVE OTP IN FIREBASE */
 
 await db
 .ref("otp/" + number)
@@ -185,11 +267,21 @@ Date.now() + 300000
 
 
 
-// SEND WHATSAPP MESSAGE
+/* JID */
+
+const jid =
+
+number.includes("@s.whatsapp.net")
+? number
+: `${number}@s.whatsapp.net`;
+
+
+
+/* SEND MESSAGE */
 
 await sock.sendMessage(
 
-number + "@s.whatsapp.net",
+jid,
 
 {
 
@@ -200,9 +292,9 @@ Your OTP for Login / Sign Up is:
 
 ✨ *${otp}*
 
-⏳ Valid for: *5 Minutes*
+⏳ Valid For: *5 Minutes*
 
-⚠️ Do not share this OTP with anyone for security reasons.
+⚠️ Do not share this OTP with anyone.
 
 — Team DoneKart`
 
@@ -211,6 +303,8 @@ Your OTP for Login / Sign Up is:
 );
 
 
+
+/* RESPONSE */
 
 res.json({
 
@@ -238,28 +332,31 @@ message:err.message
 
 
 
-// VERIFY OTP
+/* =========================
+   VERIFY OTP
+========================= */
 
-app.post(
-"/verify-otp",
+app.get(
+"/verify",
 async(req,res)=>{
 
 try{
 
-const number =
-req.body.number;
+const {
+number,
+otp
+} = req.query;
 
-const otp =
-req.body.otp;
 
 
+/* VALIDATION */
 
 if(!number || !otp){
 
 return res.status(400).json({
 
 status:"error",
-message:"Missing fields"
+message:"Missing Fields"
 
 });
 
@@ -267,7 +364,7 @@ message:"Missing fields"
 
 
 
-// GET OTP FROM FIREBASE
+/* GET OTP */
 
 const snapshot =
 await db
@@ -275,6 +372,8 @@ await db
 .once("value");
 
 
+
+/* OTP NOT FOUND */
 
 if(!snapshot.exists()){
 
@@ -294,7 +393,7 @@ snapshot.val();
 
 
 
-// CHECK EXPIRY
+/* EXPIRED */
 
 if(
 Date.now() >
@@ -318,9 +417,11 @@ message:"OTP Expired"
 
 
 
-// WRONG OTP
+/* WRONG OTP */
 
-if(otpData.code !== otp){
+if(
+otpData.code !== otp
+){
 
 return res.status(400).json({
 
@@ -333,7 +434,7 @@ message:"Invalid OTP"
 
 
 
-// DELETE OTP AFTER SUCCESS
+/* DELETE OTP */
 
 await db
 .ref("otp/" + number)
@@ -341,7 +442,7 @@ await db
 
 
 
-// VERIFIED
+/* SUCCESS */
 
 res.json({
 
@@ -369,10 +470,14 @@ message:err.message
 
 
 
+/* =========================
+   SERVER START
+========================= */
+
 app.listen(port, ()=>{
 
 console.log(
-`Server running on port ${port}`
+`Server started on port ${port}`
 );
 
 startWhatsApp();
