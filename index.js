@@ -36,11 +36,19 @@ let isConnected = false;
 
 
 
+/* START WHATSAPP */
+
 async function startWhatsApp() {
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { state, saveCreds } =
+    await useMultiFileAuthState(
+        'auth_info'
+    );
 
-    const { version } = await fetchLatestBaileysVersion();
+
+
+    const { version } =
+    await fetchLatestBaileysVersion();
 
 
 
@@ -50,9 +58,12 @@ async function startWhatsApp() {
 
         version: version,
 
-        logger: pino({ level: 'silent' }),
+        logger: pino({
+            level: 'silent'
+        }),
 
-        browser: Browsers.ubuntu("Chrome"),
+        browser:
+        Browsers.ubuntu("Chrome"),
 
         syncFullHistory: false,
 
@@ -62,41 +73,75 @@ async function startWhatsApp() {
 
 
 
-    sock.ev.on('creds.update', saveCreds);
+    /* SAVE CREDS */
+
+    sock.ev.on(
+        'creds.update',
+        saveCreds
+    );
 
 
 
-    sock.ev.on('connection.update', async (update) => {
+    /* CONNECTION */
 
-        const { connection, lastDisconnect } = update;
+    sock.ev.on(
+        'connection.update',
+        async (update) => {
+
+        const {
+            connection,
+            lastDisconnect
+        } = update;
 
 
+
+        /* CLOSE */
 
         if (connection === 'close') {
 
             isConnected = false;
 
-            const reason = lastDisconnect?.error?.output?.statusCode;
+            const reason =
+            lastDisconnect?.error?.output?.statusCode;
 
-            console.log('Connection closed. Reason Code:', reason);
+            console.log(
+                'Connection closed:',
+                reason
+            );
 
 
 
-            if (reason !== DisconnectReason.loggedOut) {
+            if (
+                reason !==
+                DisconnectReason.loggedOut
+            ) {
 
-                console.log("Reconnecting in 5 seconds...");
+                console.log(
+                    "Reconnecting..."
+                );
 
-                setTimeout(startWhatsApp, 5000);
+                setTimeout(
+                    startWhatsApp,
+                    5000
+                );
 
             }
 
-        } 
-        
-        else if (connection === 'open') {
+        }
+
+
+
+        /* OPEN */
+
+        else if (
+            connection === 'open'
+        ) {
 
             isConnected = true;
 
-            console.log("✅ WhatsApp Connected Successfully!");
+            console.log(
+                "✅ WhatsApp Connected Successfully!"
+            );
 
         }
 
@@ -111,28 +156,171 @@ async function startWhatsApp() {
 app.get("/", (req, res) => {
 
     res.send(`
-    
-        <body style="font-family:sans-serif; text-align:center; padding-top:50px;">
-        
-            <h1>WhatsApp OTP Server</h1>
 
-            <p>Status: ${isConnected ? "✅ Connected" : "❌ Not Connected"}</p>
+    <body style="
+    font-family:sans-serif;
+    text-align:center;
+    padding-top:50px;
+    ">
+
+    <h1>
+    WhatsApp OTP Server
+    </h1>
+
+    <p>
+    Status:
+    ${isConnected ? "✅ Connected" : "❌ Not Connected"}
+    </p>
+
+    <p>
+    Connect WhatsApp:
+    <br><br>
+
+    <a href="/pair?number=919693521763">
+
+    Click Here
+
+    </a>
+
+    </p>
+
+    <p>
+
+    Send OTP:
+    <br>
+
+    /send?number=919693521763
+
+    </p>
+
+    <p>
+
+    Verify OTP:
+    <br>
+
+    /verify?number=919693521763&otp=123456
+
+    </p>
+
+    </body>
+
+    `);
+
+});
+
+
+
+/* PAIR ROUTE */
+
+app.get("/pair", async (req, res) => {
+
+    try {
+
+        let number =
+        req.query.number;
+
+
+
+        if (!number) {
+
+            return res.send(`
+
+            <h1>
+            Number Required
+            </h1>
 
             <p>
-                Send OTP:
-                <br>
-                /send?number=919693521763
+
+            Example:
+            <br><br>
+
+            /pair?number=919693521763
+
             </p>
 
-            <p>
-                Verify OTP:
-                <br>
-                /verify?number=919693521763&otp=123456
-            </p>
+            `);
+
+        }
+
+
+
+        number =
+        number.replace(
+            /[^0-9]/g,
+            ''
+        );
+
+
+
+        /* WAIT */
+
+        await delay(3000);
+
+
+
+        /* GENERATE CODE */
+
+        const code =
+        await sock.requestPairingCode(
+            number
+        );
+
+
+
+        res.send(`
+
+        <body style="
+        font-family:sans-serif;
+        text-align:center;
+        padding-top:50px;
+        ">
+
+        <h1>
+        Pairing Code
+        </h1>
+
+        <div style="
+        font-size:45px;
+        font-weight:bold;
+        color:#25D366;
+        letter-spacing:5px;
+        ">
+
+        ${code}
+
+        </div>
+
+        <p>
+
+        WhatsApp
+        →
+        Linked Devices
+        →
+        Link with phone number instead
+
+        </p>
 
         </body>
 
-    `);
+        `);
+
+    } catch (err) {
+
+        console.log(err);
+
+        res.send(`
+        
+        <h1>
+        Error
+        </h1>
+
+        <p>
+        ${err.message}
+        </p>
+
+        `);
+
+    }
 
 });
 
@@ -148,9 +336,13 @@ app.get("/send", async (req, res) => {
 
     if (!isConnected) {
 
-        return res.status(500).json({ 
-            status: "error", 
-            message: "WhatsApp connected nahi hai." 
+        return res.status(500).json({
+
+            status: "error",
+
+            message:
+            "WhatsApp connected nahi hai."
+
         });
 
     }
@@ -159,9 +351,13 @@ app.get("/send", async (req, res) => {
 
     if (!number) {
 
-        return res.status(400).json({ 
-            status: "error", 
-            message: "Number missing hai." 
+        return res.status(400).json({
+
+            status: "error",
+
+            message:
+            "Number missing hai."
+
         });
 
     }
@@ -170,31 +366,44 @@ app.get("/send", async (req, res) => {
 
     try {
 
-        const cleanNumber = number.replace(/[^0-9]/g, "");
+        const cleanNumber =
+        number.replace(
+            /[^0-9]/g,
+            ""
+        );
 
-        const jid = `${cleanNumber}@s.whatsapp.net`;
+
+
+        const jid =
+        `${cleanNumber}@s.whatsapp.net`;
 
 
 
         /* GENERATE OTP */
 
-        const otp = Math.floor(
-            100000 + Math.random() * 900000
+        const otp =
+        Math.floor(
+            100000 +
+            Math.random() * 900000
         ).toString();
 
 
 
         /* SAVE OTP */
 
-        otpStore.set(cleanNumber, otp);
+        otpStore.set(
+            cleanNumber,
+            otp
+        );
 
 
 
         /* SEND MESSAGE */
 
-        await sock.sendMessage(jid, { 
+        await sock.sendMessage(jid, {
 
-            text: `🔐 *DoneKart Verification *
+            text:
+`🔐 *DoneKart Verification*
 
 Your OTP for Login / Sign Up is:
 
@@ -210,19 +419,26 @@ Your OTP for Login / Sign Up is:
 
 
 
-        res.json({ 
-            status: "success", 
+        res.json({
+
+            status: "success",
+
             message: "OTP Sent",
+
             number: cleanNumber
+
         });
 
 
 
     } catch (err) {
 
-        res.status(500).json({ 
-            status: "error", 
-            message: err.message 
+        res.status(500).json({
+
+            status: "error",
+
+            message: err.message
+
         });
 
     }
@@ -235,7 +451,10 @@ Your OTP for Login / Sign Up is:
 
 app.get("/verify", async (req, res) => {
 
-    const { number, otp } = req.query;
+    const {
+        number,
+        otp
+    } = req.query;
 
 
 
@@ -247,7 +466,8 @@ app.get("/verify", async (req, res) => {
 
                 status: "error",
 
-                message: "Number aur OTP missing hai."
+                message:
+                "Number aur OTP missing hai."
 
             });
 
@@ -255,13 +475,18 @@ app.get("/verify", async (req, res) => {
 
 
 
-        const cleanNumber = number.replace(/[^0-9]/g, "");
+        const cleanNumber =
+        number.replace(
+            /[^0-9]/g,
+            ""
+        );
 
 
 
         /* GET OTP */
 
-        const savedOtp = otpStore.get(cleanNumber);
+        const savedOtp =
+        otpStore.get(cleanNumber);
 
 
 
@@ -273,7 +498,8 @@ app.get("/verify", async (req, res) => {
 
                 status: "error",
 
-                message: "OTP Expired"
+                message:
+                "OTP Expired"
 
             });
 
@@ -289,7 +515,8 @@ app.get("/verify", async (req, res) => {
 
                 status: "error",
 
-                message: "Invalid OTP"
+                message:
+                "Invalid OTP"
 
             });
 
@@ -331,9 +558,13 @@ app.get("/verify", async (req, res) => {
 
 
 
+/* START SERVER */
+
 app.listen(port, () => {
 
-    console.log(`Server is running on port ${port}`);
+    console.log(
+        `Server is running on port ${port}`
+    );
 
     startWhatsApp();
 
