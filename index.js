@@ -11,8 +11,6 @@ const pino = require("pino");
 
 const NodeCache = require("node-cache");
 
-const readline = require("readline");
-
 
 
 /* =========================
@@ -27,7 +25,7 @@ process.env.PORT || 10000;
 
 
 /* =========================
-   OTP STORE (RAM)
+   OTP STORE
 ========================= */
 
 const otpStore =
@@ -41,24 +39,11 @@ checkperiod: 60
 
 
 
-/* =========================
-   READLINE
-========================= */
-
-const rl =
-readline.createInterface({
-
-input: process.stdin,
-
-output: process.stdout
-
-});
-
-
-
 let sock;
 
 let isConnected = false;
+
+let pairingCode = "";
 
 
 
@@ -102,7 +87,7 @@ syncFullHistory: false
 
 
 
-/* SAVE SESSION */
+/* SAVE CREDS */
 
 sock.ev.on(
 "creds.update",
@@ -117,31 +102,17 @@ if(
 !sock.authState.creds.registered
 ){
 
-rl.question(
-
-"Enter WhatsApp Number With Country Code: ",
-
-async(number)=>{
-
-try{
+const number =
+process.env.NUMBER;
 
 
 
-const cleanNumber =
+if(number){
 
-number.replace(
-/[^0-9]/g,
-""
-);
-
-
-
-const code =
+pairingCode =
 await sock.requestPairingCode(
-cleanNumber
+number
 );
-
-
 
 console.log("");
 
@@ -150,10 +121,12 @@ console.log(
 );
 
 console.log(
-"Your Pairing Code:"
+"PAIRING CODE:"
 );
 
-console.log(code);
+console.log(
+pairingCode
+);
 
 console.log(
 "================================"
@@ -161,21 +134,7 @@ console.log(
 
 console.log("");
 
-console.log(
-"WhatsApp > Linked Devices > Link With Phone Number"
-);
-
-
-
-}catch(err){
-
-console.log(err);
-
 }
-
-}
-
-);
 
 }
 
@@ -194,7 +153,7 @@ lastDisconnect
 
 
 
-/* DISCONNECTED */
+/* CLOSE */
 
 if(connection === "close"){
 
@@ -225,11 +184,15 @@ startWhatsApp();
 
 
 
-/* CONNECTED */
+/* OPEN */
 
 else if(connection === "open"){
 
 isConnected = true;
+
+pairingCode = "";
+
+
 
 console.log("");
 
@@ -274,7 +237,7 @@ if(isConnected){
 res.send(`
 
 <h1>
-Bot Status: Connected
+WhatsApp Connected
 </h1>
 
 <p>
@@ -288,16 +251,117 @@ DoneKart OTP Server Running
 res.send(`
 
 <h1>
-Bot Status: Not Connected
+WhatsApp Not Connected
 </h1>
 
 <p>
-Check Render Logs For Pairing Code
+Open:
+<a href="/pair">
+/pair
+</a>
 </p>
 
 `);
 
 }
+
+});
+
+
+
+/* =========================
+   PAIR URL
+========================= */
+
+app.get("/pair", (req,res)=>{
+
+if(isConnected){
+
+return res.send(`
+
+<h1>
+WhatsApp Already Connected
+</h1>
+
+`);
+
+}
+
+
+
+if(!pairingCode){
+
+return res.send(`
+
+<h1>
+Pairing Code Generating...
+</h1>
+
+<p>
+Refresh after 10 seconds
+</p>
+
+`);
+
+}
+
+
+
+res.send(`
+
+<html>
+
+<body style="
+font-family:Arial;
+background:#f0f2f5;
+display:flex;
+align-items:center;
+justify-content:center;
+height:100vh;
+">
+
+<div style="
+background:white;
+padding:30px;
+border-radius:20px;
+text-align:center;
+box-shadow:0 2px 10px rgba(0,0,0,0.1);
+">
+
+<h2>
+DoneKart Pairing Code
+</h2>
+
+<div style="
+font-size:40px;
+font-weight:bold;
+letter-spacing:5px;
+margin-top:20px;
+color:#2d45a0;
+">
+
+${pairingCode}
+
+</div>
+
+<p style="
+margin-top:20px;
+color:gray;
+">
+
+WhatsApp →
+Linked Devices →
+Link With Phone Number
+
+</p>
+
+</div>
+
+</body>
+
+</html>
+
+`);
 
 });
 
@@ -321,8 +385,6 @@ number
 
 
 
-/* VALIDATION */
-
 if(!number){
 
 return res.status(400).json({
@@ -337,8 +399,6 @@ message:
 }
 
 
-
-/* CONNECTION CHECK */
 
 if(!isConnected){
 
@@ -385,18 +445,11 @@ otp
 
 
 
-/* JID */
-
-const jid =
-`${cleanNumber}@s.whatsapp.net`;
-
-
-
-/* SEND MESSAGE */
+/* SEND */
 
 await sock.sendMessage(
 
-jid,
+`${cleanNumber}@s.whatsapp.net`,
 
 {
 
@@ -418,8 +471,6 @@ Your OTP for Login / Sign Up is:
 );
 
 
-
-/* RESPONSE */
 
 res.json({
 
@@ -469,8 +520,6 @@ otp
 
 
 
-/* VALIDATION */
-
 if(!number || !otp){
 
 return res.status(400).json({
@@ -506,8 +555,6 @@ cleanNumber
 
 
 
-/* OTP EXPIRED */
-
 if(!savedOtp){
 
 return res.status(400).json({
@@ -523,7 +570,7 @@ message:
 
 
 
-/* WRONG OTP */
+/* INVALID */
 
 if(savedOtp !== otp){
 
@@ -547,8 +594,6 @@ cleanNumber
 );
 
 
-
-/* SUCCESS */
 
 res.json({
 
@@ -584,21 +629,9 @@ message:err.message
 
 app.listen(port, ()=>{
 
-console.log("");
-
-console.log(
-"================================"
-);
-
 console.log(
 `Server Started On Port ${port}`
 );
-
-console.log(
-"================================"
-);
-
-console.log("");
 
 startWhatsApp();
 
