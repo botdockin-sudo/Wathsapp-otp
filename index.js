@@ -7,11 +7,11 @@ Browsers
 
 const express = require("express");
 
-const QRCode = require("qrcode");
-
 const pino = require("pino");
 
 const NodeCache = require("node-cache");
+
+const readline = require("readline");
 
 
 
@@ -41,9 +41,22 @@ checkperiod: 60
 
 
 
-let sock;
+/* =========================
+   READLINE
+========================= */
 
-let latestQR = null;
+const rl =
+readline.createInterface({
+
+input: process.stdin,
+
+output: process.stdout
+
+});
+
+
+
+let sock;
 
 let isConnected = false;
 
@@ -74,6 +87,8 @@ makeWASocket({
 
 auth: state,
 
+printQRInTerminal: false,
+
 logger: pino({
 level: "silent"
 }),
@@ -96,7 +111,77 @@ saveCreds
 
 
 
-/* CONNECTION */
+/* PAIRING CODE */
+
+if(
+!sock.authState.creds.registered
+){
+
+rl.question(
+
+"Enter WhatsApp Number With Country Code: ",
+
+async(number)=>{
+
+try{
+
+
+
+const cleanNumber =
+
+number.replace(
+/[^0-9]/g,
+""
+);
+
+
+
+const code =
+await sock.requestPairingCode(
+cleanNumber
+);
+
+
+
+console.log("");
+
+console.log(
+"================================"
+);
+
+console.log(
+"Your Pairing Code:"
+);
+
+console.log(code);
+
+console.log(
+"================================"
+);
+
+console.log("");
+
+console.log(
+"WhatsApp > Linked Devices > Link With Phone Number"
+);
+
+
+
+}catch(err){
+
+console.log(err);
+
+}
+
+}
+
+);
+
+}
+
+
+
+/* CONNECTION UPDATE */
 
 sock.ev.on(
 "connection.update",
@@ -104,23 +189,8 @@ sock.ev.on(
 
 const {
 connection,
-lastDisconnect,
-qr
+lastDisconnect
 } = update;
-
-
-
-/* QR */
-
-if(qr){
-
-latestQR = qr;
-
-console.log(
-"New QR Generated"
-);
-
-}
 
 
 
@@ -159,13 +229,23 @@ startWhatsApp();
 
 else if(connection === "open"){
 
-latestQR = null;
-
 isConnected = true;
+
+console.log("");
+
+console.log(
+"================================"
+);
 
 console.log(
 "WhatsApp Connected Successfully"
 );
+
+console.log(
+"================================"
+);
+
+console.log("");
 
 }
 
@@ -198,13 +278,7 @@ Bot Status: Connected
 </h1>
 
 <p>
-OTP Server Running
-</p>
-
-<p>
-Send OTP:
-<br>
-/send?number=919876543210
+DoneKart OTP Server Running
 </p>
 
 `);
@@ -218,130 +292,10 @@ Bot Status: Not Connected
 </h1>
 
 <p>
-<a href="/qr">
-Open QR Code
-</a>
+Check Render Logs For Pairing Code
 </p>
 
 `);
-
-}
-
-});
-
-
-
-/* =========================
-   QR PAGE
-========================= */
-
-app.get(
-"/qr",
-async(req,res)=>{
-
-if(isConnected){
-
-return res.send(`
-
-<h1>
-WhatsApp Already Connected
-</h1>
-
-`);
-
-}
-
-
-
-if(!latestQR){
-
-return res.send(`
-
-<h1>
-QR Generate Ho Raha Hai...
-</h1>
-
-<p>
-10 seconds baad refresh karein.
-</p>
-
-`);
-
-}
-
-
-
-try{
-
-
-
-const qrImage =
-await QRCode.toDataURL(
-latestQR
-);
-
-
-
-res.send(`
-
-<html>
-
-<body style="
-text-align:center;
-font-family:Arial;
-background:#f0f2f5;
-padding-top:50px;
-">
-
-<div style="
-background:white;
-display:inline-block;
-padding:20px;
-border-radius:10px;
-box-shadow:0 2px 10px rgba(0,0,0,0.1);
-">
-
-<h2>
-Scan with WhatsApp
-</h2>
-
-<img
-src="${qrImage}"
-style="
-width:300px;
-height:300px;
-"
-/>
-
-<p>
-Scanning ke baad page auto refresh hoga.
-</p>
-
-</div>
-
-<script>
-
-setTimeout(()=>{
-
-location.reload();
-
-},15000);
-
-</script>
-
-</body>
-
-</html>
-
-`);
-
-
-
-}catch(err){
-
-res.send(
-"QR Error: " + err.message
-);
 
 }
 
@@ -422,7 +376,7 @@ Math.floor(
 
 
 
-/* SAVE OTP IN RAM */
+/* SAVE OTP */
 
 otpStore.set(
 cleanNumber,
@@ -630,9 +584,21 @@ message:err.message
 
 app.listen(port, ()=>{
 
+console.log("");
+
+console.log(
+"================================"
+);
+
 console.log(
 `Server Started On Port ${port}`
 );
+
+console.log(
+"================================"
+);
+
+console.log("");
 
 startWhatsApp();
 
