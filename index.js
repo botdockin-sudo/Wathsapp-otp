@@ -1,40 +1,17 @@
 const {
 default: makeWASocket,
 useMultiFileAuthState,
-DisconnectReason
+DisconnectReason,
+Browsers
 } = require("@whiskeysockets/baileys");
 
 const express = require("express");
 
+const QRCode = require("qrcode");
+
 const pino = require("pino");
 
-const admin = require("firebase-admin");
-
-
-
-/* =========================
-   FIREBASE
-========================= */
-
-const serviceAccount =
-require("./serviceAccountKey.json");
-
-
-
-admin.initializeApp({
-
-credential:
-admin.credential.cert(serviceAccount),
-
-databaseURL:
-"https://donekart-1f33e-default-rtdb.firebaseio.com"
-
-});
-
-
-
-const db =
-admin.database();
+const NodeCache = require("node-cache");
 
 
 
@@ -49,7 +26,26 @@ process.env.PORT || 10000;
 
 
 
+/* =========================
+   OTP STORE (RAM)
+========================= */
+
+const otpStore =
+new NodeCache({
+
+stdTTL: 300,
+
+checkperiod: 60
+
+});
+
+
+
 let sock;
+
+let latestQR = null;
+
+let isConnected = false;
 
 
 
@@ -60,6 +56,8 @@ let sock;
 async function startWhatsApp(){
 
 try{
+
+
 
 const {
 state,
@@ -76,11 +74,14 @@ makeWASocket({
 
 auth: state,
 
-printQRInTerminal: true,
-
 logger: pino({
 level: "silent"
-})
+}),
+
+browser:
+Browsers.macOS("Desktop"),
+
+syncFullHistory: false
 
 });
 
@@ -95,7 +96,7 @@ saveCreds
 
 
 
-/* CONNECTION UPDATE */
+/* CONNECTION */
 
 sock.ev.on(
 "connection.update",
@@ -109,12 +110,14 @@ qr
 
 
 
-/* QR RECEIVED */
+/* QR */
 
 if(qr){
 
+latestQR = qr;
+
 console.log(
-"QR RECEIVED - Scan From Render Logs"
+"New QR Generated"
 );
 
 }
@@ -124,6 +127,10 @@ console.log(
 /* DISCONNECTED */
 
 if(connection === "close"){
+
+isConnected = false;
+
+
 
 const shouldReconnect =
 
@@ -152,6 +159,10 @@ startWhatsApp();
 
 else if(connection === "open"){
 
+latestQR = null;
+
+isConnected = true;
+
 console.log(
 "WhatsApp Connected Successfully"
 );
@@ -178,9 +189,161 @@ console.log(err);
 
 app.get("/", (req,res)=>{
 
-res.send(
-"DoneKart OTP Server Running"
+if(isConnected){
+
+res.send(`
+
+<h1>
+Bot Status: Connected
+</h1>
+
+<p>
+OTP Server Running
+</p>
+
+<p>
+Send OTP:
+<br>
+/send?number=919876543210
+</p>
+
+`);
+
+}else{
+
+res.send(`
+
+<h1>
+Bot Status: Not Connected
+</h1>
+
+<p>
+<a href="/qr">
+Open QR Code
+</a>
+</p>
+
+`);
+
+}
+
+});
+
+
+
+/* =========================
+   QR PAGE
+========================= */
+
+app.get(
+"/qr",
+async(req,res)=>{
+
+if(isConnected){
+
+return res.send(`
+
+<h1>
+WhatsApp Already Connected
+</h1>
+
+`);
+
+}
+
+
+
+if(!latestQR){
+
+return res.send(`
+
+<h1>
+QR Generate Ho Raha Hai...
+</h1>
+
+<p>
+10 seconds baad refresh karein.
+</p>
+
+`);
+
+}
+
+
+
+try{
+
+
+
+const qrImage =
+await QRCode.toDataURL(
+latestQR
 );
+
+
+
+res.send(`
+
+<html>
+
+<body style="
+text-align:center;
+font-family:Arial;
+background:#f0f2f5;
+padding-top:50px;
+">
+
+<div style="
+background:white;
+display:inline-block;
+padding:20px;
+border-radius:10px;
+box-shadow:0 2px 10px rgba(0,0,0,0.1);
+">
+
+<h2>
+Scan with WhatsApp
+</h2>
+
+<img
+src="${qrImage}"
+style="
+width:300px;
+height:300px;
+"
+/>
+
+<p>
+Scanning ke baad page auto refresh hoga.
+</p>
+
+</div>
+
+<script>
+
+setTimeout(()=>{
+
+location.reload();
+
+},15000);
+
+</script>
+
+</body>
+
+</html>
+
+`);
+
+
+
+}catch(err){
+
+res.send(
+"QR Error: " + err.message
+);
+
+}
 
 });
 
@@ -196,6 +359,8 @@ async(req,res)=>{
 
 try{
 
+
+
 const {
 number
 } = req.query;
@@ -209,7 +374,9 @@ if(!number){
 return res.status(400).json({
 
 status:"error",
-message:"Number Required"
+
+message:
+"Number Required"
 
 });
 
@@ -217,18 +384,31 @@ message:"Number Required"
 
 
 
-/* WHATSAPP CHECK */
+/* CONNECTION CHECK */
 
-if(!sock){
+if(!isConnected){
 
 return res.status(500).json({
 
 status:"error",
-message:"WhatsApp Not Connected"
+
+message:
+"WhatsApp Not Connected"
 
 });
 
 }
+
+
+
+/* CLEAN NUMBER */
+
+const cleanNumber =
+
+number.replace(
+/[^0-9]/g,
+""
+);
 
 
 
@@ -242,31 +422,19 @@ Math.floor(
 
 
 
-/* SAVE OTP */
+/* SAVE OTP IN RAM */
 
-await db
-.ref("otp/" + number)
-.set({
-
-code: otp,
-
-createdAt:
-Date.now(),
-
-expiresAt:
-Date.now() + 300000
-
-});
+otpStore.set(
+cleanNumber,
+otp
+);
 
 
 
 /* JID */
 
 const jid =
-
-number.includes("@s.whatsapp.net")
-? number
-: `${number}@s.whatsapp.net`;
+`${cleanNumber}@s.whatsapp.net`;
 
 
 
@@ -302,7 +470,9 @@ Your OTP for Login / Sign Up is:
 res.json({
 
 status:"success",
-message:"OTP Sent"
+
+message:
+`OTP Sent To ${cleanNumber}`
 
 });
 
@@ -315,6 +485,7 @@ console.log(err);
 res.status(500).json({
 
 status:"error",
+
 message:err.message
 
 });
@@ -335,6 +506,8 @@ async(req,res)=>{
 
 try{
 
+
+
 const {
 number,
 otp
@@ -349,60 +522,46 @@ if(!number || !otp){
 return res.status(400).json({
 
 status:"error",
-message:"Missing Fields"
+
+message:
+"Missing Fields"
 
 });
 
 }
+
+
+
+/* CLEAN NUMBER */
+
+const cleanNumber =
+
+number.replace(
+/[^0-9]/g,
+""
+);
 
 
 
 /* GET OTP */
 
-const snapshot =
-await db
-.ref("otp/" + number)
-.once("value");
-
-
-
-/* OTP NOT FOUND */
-
-if(!snapshot.exists()){
-
-return res.status(400).json({
-
-status:"error",
-message:"OTP Expired"
-
-});
-
-}
-
-
-
-const otpData =
-snapshot.val();
+const savedOtp =
+otpStore.get(
+cleanNumber
+);
 
 
 
 /* OTP EXPIRED */
 
-if(
-Date.now() >
-otpData.expiresAt
-){
-
-await db
-.ref("otp/" + number)
-.remove();
-
-
+if(!savedOtp){
 
 return res.status(400).json({
 
 status:"error",
-message:"OTP Expired"
+
+message:
+"OTP Expired"
 
 });
 
@@ -410,16 +569,16 @@ message:"OTP Expired"
 
 
 
-/* INVALID OTP */
+/* WRONG OTP */
 
-if(
-otpData.code !== otp
-){
+if(savedOtp !== otp){
 
 return res.status(400).json({
 
 status:"error",
-message:"Invalid OTP"
+
+message:
+"Invalid OTP"
 
 });
 
@@ -429,9 +588,9 @@ message:"Invalid OTP"
 
 /* DELETE OTP */
 
-await db
-.ref("otp/" + number)
-.remove();
+otpStore.del(
+cleanNumber
+);
 
 
 
@@ -440,6 +599,7 @@ await db
 res.json({
 
 status:"success",
+
 verified:true
 
 });
@@ -453,6 +613,7 @@ console.log(err);
 res.status(500).json({
 
 status:"error",
+
 message:err.message
 
 });
@@ -470,7 +631,7 @@ message:err.message
 app.listen(port, ()=>{
 
 console.log(
-`Server started on port ${port}`
+`Server Started On Port ${port}`
 );
 
 startWhatsApp();
