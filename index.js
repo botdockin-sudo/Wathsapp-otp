@@ -52,32 +52,43 @@ app.get("/", (req, res) => {
     res.send(`
         <div style="font-family:sans-serif; text-align:center; padding-top:50px;">
             <h1>DoneKart OTP Server</h1>
-            <p>Status: ${isConnected ? "✅ Connected" : "❌ Not Connected"}</p>
-            <p>Send OTP: <code>/send?number=91XXXXXXXXXX</code></p>
+            <p>Status: ${isConnected ? "<span style='color:green'>✅ Connected</span>" : "<span style='color:red'>❌ Not Connected</span>"}</p>
+            <p>API Endpoint: <code>/send?number=91XXXXXXXXXX</code></p>
         </div>
     `);
 });
 
-// 2. Pairing Code Route
+// 2. Pairing Code Route (Mobile Login ke liye)
 app.get("/pair", async (req, res) => {
     let phoneNumber = req.query.number;
-    if (!phoneNumber) return res.send("Number missing!");
+    if (!phoneNumber) return res.send("Phone number missing!");
+    
     phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
     try {
-        await delay(2000);
+        if (isConnected) return res.send("<h1>Already Connected!</h1>");
+        
+        // WhatsApp system ko thoda time chahiye hota hai session initialize karne ke liye
+        await delay(3000); 
         const code = await sock.requestPairingCode(phoneNumber);
-        res.send(`<h1>Pairing Code: ${code}</h1>`);
+        res.send(`
+            <div style="font-family:sans-serif; text-align:center; padding-top:50px;">
+                <h2>Your Pairing Code:</h2>
+                <h1 style="background:#f4f4f4; display:inline-block; padding:10px 20px; border-radius:10px; letter-spacing:5px;">${code}</h1>
+                <p>Open WhatsApp > Linked Devices > Link with Phone Number</p>
+            </div>
+        `);
     } catch (err) {
-        res.send("Error generating code.");
+        console.error("Pairing Error:", err);
+        res.send("Error generating code. Please restart server or check number.");
     }
 });
 
-// 3. Send OTP (Auto-Generate & RAM-expiry)
+// 3. Send OTP (OTP Hide kar diya gaya hai response se)
 app.get("/send", async (req, res) => {
     const { number } = req.query;
 
-    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connect nahi hai." });
-    if (!number) return res.status(400).json({ status: "error", message: "Number chahiye." });
+    if (!isConnected) return res.status(500).json({ status: "error", message: "WhatsApp connected nahi hai." });
+    if (!number) return res.status(400).json({ status: "error", message: "Number required." });
 
     const cleanNumber = number.replace(/[^0-9]/g, "");
     const jid = `${cleanNumber}@s.whatsapp.net`;
@@ -86,47 +97,50 @@ app.get("/send", async (req, res) => {
     const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
 
     try {
-        // WhatsApp par message bhejna
         await sock.sendMessage(jid, {
             text: `🔐 *DoneKart Verification*\n\nYour OTP is: *${generatedOtp}*\n\n⏳ Valid for: *5 Minutes*\n\n— Team DoneKart`
         });
 
-        // RAM (Map) mein save karna
+        // Save in RAM
         otpStore.set(cleanNumber, generatedOtp);
 
-        // 5 Minute baad RAM se delete karna (WhatsApp se nahi)
+        // Delete from RAM after 5 Minutes
         setTimeout(() => {
             otpStore.delete(cleanNumber);
-            console.log(`OTP Expired for ${cleanNumber} (Removed from RAM)`);
         }, 5 * 60 * 1000);
 
+        // Sirf success message bhejna hai, OTP nahi
         res.json({ 
             status: "success", 
-            message: "OTP Sent", 
-            number: cleanNumber,
-            verify_url: `/verify?number=${cleanNumber}&otp=${generatedOtp}`
+            message: "OTP sent successfully."
         });
+
     } catch (err) {
-        res.status(500).json({ status: "error", message: err.message });
+        res.status(500).json({ status: "error", message: "Failed to send message." });
     }
 });
 
 // 4. Verify OTP Route
 app.get("/verify", (req, res) => {
     const { number, otp } = req.query;
-    const cleanNumber = number?.replace(/[^0-9]/g, "");
     
+    if (!number || !otp) {
+        return res.json({ status: "error", message: "Number aur OTP dono chahiye." });
+    }
+
+    const cleanNumber = number.replace(/[^0-9]/g, "");
     const savedOtp = otpStore.get(cleanNumber);
 
     if (!savedOtp) {
         return res.json({ status: "error", message: "OTP expired ya invalid hai." });
     }
 
-    if (savedOtp === otp) {
-        otpStore.delete(cleanNumber); // Verify hone par RAM se hata do
-        res.json({ status: "success", message: "OTP Sahi Hai!" });
+    // String comparison taaki type error na ho
+    if (savedOtp === otp.toString()) {
+        otpStore.delete(cleanNumber); // Ek baar verify hone par delete kar dein
+        res.json({ status: "success", message: "Verification Successful!" });
     } else {
-        res.json({ status: "error", message: "Galat OTP!" });
+        res.json({ status: "error", message: "Galat OTP code entered." });
     }
 });
 
